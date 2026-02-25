@@ -2,6 +2,9 @@ const std = @import("std");
 const zush = @import("zush");
 const vaxis = @import("vaxis");
 const vxfw = vaxis.vxfw;
+const iw = @import("iw/root.zig");
+
+// iw.d_verbose = false,
 
 // app state
 const Model = struct {
@@ -19,19 +22,19 @@ const Model = struct {
         };
     }
 
-    fn typeErasedEventHandler(_: *anyopaque, _: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
+    fn typeErasedEventHandler(_: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
         // const self: *Model = @ptrCast(@alignCast(ptr));
         switch (event) {
             // The root widget is always sent an init event as the first event. Users of the
             // library can also send this event to other widgets they create if they need to do
             // some initialization.
             // .init => return ctx.requestFocus(self.button.widget()),
-            // .key_press => |key| {
-            //     if (key.matches('c', .{ .ctrl = true })) {
-            //         ctx.quit = true;
-            //         return;
-            //     }
-            // },
+            .key_press => |key| {
+                if (key.matches('c', .{ .ctrl = true })) {
+                    ctx.quit = true;
+                    return;
+                }
+            },
             // We can request a specific widget gets focus. In this case, we always want to focus
             // our button. Having focus means that key events will be sent up the widget tree to
             // the focused widget, and then bubble back down the tree to the root. Users can tell
@@ -41,7 +44,7 @@ const Model = struct {
         }
     }
 
-    fn typeErasedDrawFn(ptr: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxfw.Surface {
+    fn typeErasedDrawFn(ptr: *anyopaque, ctx: vxfw.DrawContext) !vxfw.Surface {
         const self: *Model = @ptrCast(@alignCast(ptr));
         // The DrawContext is inspired from Flutter. Each widget will receive a minimum and maximum
         // constraint. The minimum constraint will always be set, even if it is set to 0x0. The
@@ -57,8 +60,12 @@ const Model = struct {
         // We can safely allocate this with the ctx arena since we only need it for this frame.
         // const count_text = try std.fmt.allocPrint(ctx.arena, "{d}", .{self.count});
         // const text: vxfw.Text = .{ .text = count_text };
-        const text1: vxfw.Text = .{ .text = "home" };
-        const text2: vxfw.Text = .{ .text = "drives" };
+        const textt = iw.checkMIME("build.zig", ctx.arena) catch |err| {
+            std.debug.print("error: {}", .{err});
+            return error.OutOfMemory;
+        };
+        const text1: vxfw.Text = .{ .text = "home---" };
+        const text2: vxfw.Text = .{ .text = textt };
         const roww: vxfw.FlexRow = .{
             .children = &.{
                 .{ .widget = text1.widget(), .flex = 0 },
