@@ -21,6 +21,8 @@ pub fn build(b: *std.Build) void {
     });
 
     exe_mod.addImport("vaxis", vaxis.module("vaxis"));
+    exe_mod.linkSystemLibrary("c", .{});
+    exe_mod.linkSystemLibrary("magic", .{});
 
     const exe = b.addExecutable(.{
         .name = "zush",
