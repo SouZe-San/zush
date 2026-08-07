@@ -1,7 +1,9 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
 const header = @import("../widget/header.zig");
+const iw = @import("../iw/root.zig");
 const vxfw = vaxis.vxfw;
+const border = vaxis.widgets.border;
 // -- TYPEs
 const Border = vxfw.Border;
 const Button = vxfw.Button;
@@ -9,19 +11,22 @@ const Center = vxfw.Center;
 const Padding = vxfw.Padding;
 const Cell = vaxis.Cell;
 const TextInput = vaxis.widgets.TextInput;
-const border = vaxis.widgets.border;
 
 const drive_options = [_][]const u8{ "Network USB", "KeyBoard", "USB KingDom", "SanDisk (32 GB)" };
-const boot_options = [_][]const u8{ "Zorin_OS_99.7_Ultimate_procode_LTS.iso", "Ubuntu_24.04_LTS.iso", "Windows_11_ISO.iso" };
 const scheme_options = [_][]const u8{ "MBR", "GPT" };
 const target_options = [_][]const u8{ "BIOS or UEFI", "UEFI (non CSM)" };
-const all_options = [_][]const []const u8{ &drive_options, &boot_options, &scheme_options, &target_options };
+
+// const boot_options = [_][]const u8{ "Zorin_OS_99.7_Ultimate_procode_LTS.iso", "Ubuntu_24.04_LTS.iso", "Windows_11_ISO.iso" };
+// const all_options = [_][]const []const u8{ &drive_options, &boot_options, &scheme_options, &target_options };
 
 const RowData = struct { label: []const u8, opt: []const u8 };
 pub const Model = struct {
     focused_row_index: usize = 0, // 0 = Devices, 1 = Boot Selection, 2 = Scheme, 3 = Target
     selected_indices: [4]usize = [_]usize{0} ** 4,
     volume_label_buf: [32]u8 = undefined,
+
+    // Real ISO files found on disk (see refreshBootOptions). Empty until
+    boot_options: [][]const u8 = &.{},
 
     volume_label_len: usize = 0,
     is_started: bool = false,
@@ -38,6 +43,46 @@ pub const Model = struct {
             .eventHandler = Model.typeErasedEventHandler,
             .drawFn = Model.typeErasedDrawFn,
         };
+    }
+
+    // Row struture  - Options
+    fn optionsForRow(self: *const Model, index: usize) []const []const u8 {
+        return switch (index) {
+            0 => &drive_options,
+            1 => self.boot_options,
+            2 => &scheme_options,
+            3 => &target_options,
+            else => &.{},
+        };
+    }
+
+    /// Where we look for ISO images: ~/Downloads, falling back to the
+    /// current directory if $HOME isn't set. Change this if your ISOs live
+    /// somewhere else (e.g. a mounted drive).
+    fn isoSearchDir(buf: []u8) []const u8 {
+        // const home = std.posix.getenv("HOME") orelse return ".";
+        // return std.fmt.bufPrint(buf, "{s}/Downloads", .{home}) catch ".";
+        return std.fs.selfExeDirPath(buf) catch ".";
+    }
+
+    // scan for iso image
+    pub fn refreshBootOptions(self: *Model, allocator: std.mem.Allocator) !void {
+        self.freeBootOptions(allocator);
+
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const search_dir = isoSearchDir(&path_buf);
+
+        self.boot_options = try iw.findIsoImages(allocator, search_dir);
+        self.selected_indices[1] = 0;
+    }
+    // release the memories
+    fn freeBootOptions(self: *Model, allocator: std.mem.Allocator) void {
+        for (self.boot_options) |name| allocator.free(name);
+        allocator.free(self.boot_options);
+        self.boot_options = &.{};
+    }
+    pub fn deinit(self: *Model, allocator: std.mem.Allocator) void {
+        self.freeBootOptions(allocator);
     }
 
     pub fn onClick(maybe_ptr: ?*anyopaque, ctx: *vxfw.EventContext) anyerror!void {
@@ -109,7 +154,8 @@ pub const Model = struct {
                 if (key.matches(vaxis.Key.right, .{})) {
                     if (self.focused_row_index == 4 or self.focused_row_index == 5) return;
                     const index = self.focused_row_index;
-                    self.selected_indices[index] = (self.selected_indices[index] + 1) % all_options[index].len;
+                    const len = self.optionsForRow(index).len;
+                    self.selected_indices[index] = (self.selected_indices[index] + 1) % len;
                     ctx.consumeAndRedraw();
                     return;
                 }
@@ -118,10 +164,12 @@ pub const Model = struct {
                 if (key.matches(vaxis.Key.left, .{})) {
                     if (self.focused_row_index == 4 or self.focused_row_index == 5) return;
                     const index = self.focused_row_index;
+                    const len = self.optionsForRow(index).len;
+                    if (len == 0) return; // fallback if not ISO present
                     if (self.selected_indices[index] > 0) {
                         self.selected_indices[index] -= 1;
                     } else {
-                        self.selected_indices[index] = all_options[index].len - 1;
+                        self.selected_indices[index] = len - 1;
                     }
                     ctx.consumeAndRedraw();
                     return;
@@ -153,9 +201,14 @@ pub const Model = struct {
         try subsurfaces.append(arena, .{ .origin = .{ .row = current_row, .col = 0 }, .surface = try drive_header.draw(ctx) });
         current_row += 2;
 
+        const boot_selection: []const u8 = if (self.boot_options.len > 0)
+            self.boot_options[self.selected_indices[1]]
+        else
+            "No .iso files found in current directory";
+
         const rows = [_]RowData{
             .{ .label = "Devices", .opt = drive_options[self.selected_indices[0]] },
-            .{ .label = "Boot Selection", .opt = boot_options[self.selected_indices[1]] },
+            .{ .label = "Boot Selection", .opt = boot_selection },
             .{ .label = "Scheme", .opt = scheme_options[self.selected_indices[2]] },
             .{ .label = "Target", .opt = target_options[self.selected_indices[3]] },
         };

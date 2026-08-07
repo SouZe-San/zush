@@ -174,5 +174,8 @@ pub fn main() !void {
     model.tab_bar.btn_flasher.label = &model.flasher_label;
     model.tab_bar.btn_iso.label = &model.iso_label;
 
+    try model.flasher_model.refreshBootOptions(allocator);
+    defer model.flasher_model.deinit(allocator);
+
     try app.run(model.widget(), .{});
 }
