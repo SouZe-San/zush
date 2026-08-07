@@ -1,13 +1,12 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
-const zush = @import("zush");
 const header = @import("../widget/header.zig");
 const vxfw = vaxis.vxfw;
 // -- TYPEs
 const Border = vxfw.Border;
 const Button = vxfw.Button;
 const Center = vxfw.Center;
-
+const Padding = vxfw.Padding;
 const Cell = vaxis.Cell;
 const TextInput = vaxis.widgets.TextInput;
 const border = vaxis.widgets.border;
@@ -18,10 +17,12 @@ const scheme_options = [_][]const u8{ "MBR", "GPT" };
 const target_options = [_][]const u8{ "BIOS or UEFI", "UEFI (non CSM)" };
 const all_options = [_][]const []const u8{ &drive_options, &boot_options, &scheme_options, &target_options };
 
+const RowData = struct { label: []const u8, opt: []const u8 };
 pub const Model = struct {
     focused_row_index: usize = 0, // 0 = Devices, 1 = Boot Selection, 2 = Scheme, 3 = Target
     selected_indices: [4]usize = [_]usize{0} ** 4,
     volume_label_buf: [32]u8 = undefined,
+
     volume_label_len: usize = 0,
     is_started: bool = false,
     start_btn: vxfw.Button = .{
@@ -31,9 +32,9 @@ pub const Model = struct {
     const MAX_ROWS: usize = 6;
 
     // --- Helper Widget Interface ---
-    pub fn widget(self: *Model) vxfw.Widget {
+    pub fn widget(self: *const Model) vxfw.Widget {
         return .{
-            .userdata = self,
+            .userdata = @constCast(self),
             .eventHandler = Model.typeErasedEventHandler,
             .drawFn = Model.typeErasedDrawFn,
         };
@@ -47,6 +48,7 @@ pub const Model = struct {
     // --- Event Handling ---
     fn typeErasedEventHandler(ptr: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
         const self: *Model = @ptrCast(@alignCast(ptr));
+
         switch (event) {
             .init => return ctx.requestFocus(self.widget()),
             .key_press => |key| {
@@ -55,7 +57,7 @@ pub const Model = struct {
                     return;
                 }
 
-                if (key.matches(vaxis.Key.tab, .{ .shift = true })) {
+                if (key.matches(vaxis.Key.tab, .{ .shift = true }) or key.matches(vaxis.Key.up, .{})) {
                     // Shift+Tab: Move UP, wrap to the bottom if at the top
                     if (self.focused_row_index == 0) {
                         self.focused_row_index = MAX_ROWS - 1;
@@ -64,23 +66,9 @@ pub const Model = struct {
                     }
                     ctx.consumeAndRedraw();
                     return;
-                } else if (key.matches(vaxis.Key.tab, .{})) {
+                } else if (key.matches(vaxis.Key.tab, .{}) or key.matches(vaxis.Key.down, .{})) {
                     // Tab: Move DOWN, wrap to the top if at the bottom
                     self.focused_row_index = (self.focused_row_index + 1) % MAX_ROWS;
-                    ctx.consumeAndRedraw();
-                    return;
-                }
-
-                // Move highlight UP
-                if (key.matches(vaxis.Key.up, .{})) {
-                    if (self.focused_row_index > 0) self.focused_row_index -= 1;
-                    ctx.consumeAndRedraw();
-                    return;
-                }
-
-                // Move highlight DOWN
-                if (key.matches(vaxis.Key.down, .{})) {
-                    if (self.focused_row_index < MAX_ROWS - 1) self.focused_row_index += 1;
                     ctx.consumeAndRedraw();
                     return;
                 }
@@ -95,8 +83,13 @@ pub const Model = struct {
 
                 if (self.focused_row_index == 4) {
                     if (key.matches(vaxis.Key.backspace, .{})) {
-                        // Delete last character
-                        if (self.volume_label_len > 0) self.volume_label_len -= 1;
+                        // Delete the last UTF-8 codepoint, not just one byte,
+                        // so multi-byte characters are removed cleanly. Walk
+                        // back over 0b10xxxxxx continuation bytes.
+                        while (self.volume_label_len > 0) {
+                            self.volume_label_len -= 1;
+                            if (self.volume_label_buf[self.volume_label_len] & 0xC0 != 0x80) break;
+                        }
                         ctx.consumeAndRedraw();
                         return;
                     }
@@ -134,7 +127,9 @@ pub const Model = struct {
                     return;
                 }
             },
-            .focus_in => return ctx.requestFocus(self.widget()),
+            .focus_in => {
+                return ctx.requestFocus(self.widget());
+            },
             else => {},
         }
     }
@@ -151,20 +146,13 @@ pub const Model = struct {
 
         // Define Styles
         const row_active: vaxis.Style = .{ .bg = .{ .rgb = .{ 220, 220, 220 } }, .fg = .{ .rgb = .{ 0, 0, 0 } }, .bold = true };
-        const row_inactive: vaxis.Style = .{ .bg = .default, .fg = .default };
-
-        // --- Draw Top UI ---
-        const tabList = try header.create_headerEndingWithUnicode(arena, max_size.width, "--[ Flasher ]-- ISO Info ", "-");
-
-        try subsurfaces.append(arena, .{ .origin = .{ .row = current_row, .col = 0 }, .surface = try tabList.draw(ctx) });
-        current_row += 2;
+        const row_inactive: vaxis.Style = .{ .bg = .{ .rgb = .{ 40, 40, 40 } }, .fg = .default };
 
         const drive_header = try header.create_headerStartingWithUnicode(arena, max_size.width, "Drive Properties::", ":");
 
         try subsurfaces.append(arena, .{ .origin = .{ .row = current_row, .col = 0 }, .surface = try drive_header.draw(ctx) });
         current_row += 2;
 
-        const RowData = struct { label: []const u8, opt: []const u8 };
         const rows = [_]RowData{
             .{ .label = "Devices", .opt = drive_options[self.selected_indices[0]] },
             .{ .label = "Boot Selection", .opt = boot_options[self.selected_indices[1]] },
@@ -180,7 +168,6 @@ pub const Model = struct {
             var text_style = current_style;
 
             if (is_focused) {
-                // arrow_style.fg = .{ .rgb = .{ 61, 105, 195 } }; // A nice cyan/mint color
                 arrow_style.bold = true;
                 text_style.bold = true;
             } else {
@@ -188,7 +175,12 @@ pub const Model = struct {
             }
 
             //  The Left Label
-            const lbl_w: vxfw.Text = .{ .text = rd.label };
+            const lbl_w: vxfw.Text = .{
+                .text = rd.label,
+                .style = .{
+                    .bg = .{ .rgb = .{ 40, 40, 40 } },
+                },
+            };
 
             const left_arrow: vxfw.Text = .{ .text = if (is_focused) " <<" else "   ", .style = arrow_style };
             const right_arrow: vxfw.Text = .{ .text = if (is_focused) ">>  " else "   ", .style = arrow_style, .text_align = .right };
@@ -210,17 +202,14 @@ pub const Model = struct {
                 },
             };
 
+            // Reserve a 3-column gutter on the left (rows are drawn at col = 3).
+            // In vaxis 0.5.1, ctx.max is MaxSize (width: ?u16) and ctx.min is
+            // Size (width: u16), hence the different handling.
             var row_ctx = ctx;
             row_ctx.max.height = 1;
             row_ctx.min.height = 1;
-            if (ctx.max.width) |w| {
-                row_ctx.max.width = w -| 3;
-            }
-            if (@typeInfo(@TypeOf(ctx.min.width)) == .optional) {
-                if (ctx.min.width) |min_w| row_ctx.min.width = min_w -| 3;
-            } else {
-                row_ctx.min.width = ctx.min.width -| 3;
-            }
+            if (ctx.max.width) |w| row_ctx.max.width = w -| 3;
+            row_ctx.min.width = ctx.min.width -| 3;
             try subsurfaces.append(arena, .{ .origin = .{ .row = current_row, .col = 3 }, .surface = try fr.draw(row_ctx) });
 
             current_row += 2;
@@ -236,25 +225,30 @@ pub const Model = struct {
 
         // Grab the string slice currently typed by the user
         const current_vol_text = self.volume_label_buf[0..self.volume_label_len];
-
         const vol_opt_str = if (is_vol_focused)
             try std.fmt.allocPrint(arena, "  [ {s}█ ]  ", .{current_vol_text})
         else
             try std.fmt.allocPrint(arena, "[   {s}    ]", .{current_vol_text});
 
-        const vol_lbl_w: vxfw.Text = .{ .text = "Volume Label" };
+        const vol_lbl_w: vxfw.Text = .{
+            .text = "Volume Label",
+            .style = .{ .bg = .{ .rgb = .{ 40, 40, 40 } } },
+        };
+
         const vol_opt_w: vxfw.Text = .{ .text = vol_opt_str, .style = if (is_vol_focused) row_active else row_inactive, .text_align = .center };
+
         const vol_fr: vxfw.FlexRow = .{ .children = &.{
             .{ .widget = vol_lbl_w.widget(), .flex = 1 },
             .{ .widget = vol_opt_w.widget(), .flex = 2 },
         } };
+
         try subsurfaces.append(arena, .{ .origin = .{ .row = current_row, .col = 4 }, .surface = try vol_fr.draw(ctx) });
 
         current_row += 4;
 
         // --- Draw Start Button ---
 
-        const btn_ready: vaxis.Style = .{ .fg = .{ .rgb = .{ 255, 255, 255 } } };
+        const btn_ready: vaxis.Style = .{ .fg = .{ .rgb = .{ 255, 255, 255 } }, .bg = .{ .rgb = .{ 40, 40, 40 } } };
         const btn_active: vaxis.Style = .{ .bg = .{ .rgb = .{ 50, 200, 50 } }, .fg = .{ .rgb = .{ 0, 0, 0 } } };
 
         const is_start_focused = (self.focused_row_index == 5);
@@ -266,14 +260,22 @@ pub const Model = struct {
         else
             btn_ready;
         self.start_btn.style.default = current_btn_style;
-
+        self.start_btn.style.hover = btn_active;
         const start_button_border: Border = .{
             .child = self.start_btn.widget(),
+            .style = .{
+                .bg = .{ .rgb = .{ 40, 40, 40 } },
+            },
+        };
+
+        const button_without_padding: vxfw.Padding = .{
+            .child = start_button_border.widget(),
+            .padding = Padding.all(0),
         };
 
         try subsurfaces.append(arena, .{
             .origin = .{ .row = current_row, .col = 0 },
-            .surface = try start_button_border.draw(ctx.withConstraints(
+            .surface = try button_without_padding.draw(ctx.withConstraints(
                 ctx.min,
                 .{ .width = max_size.width - 10, .height = 3 },
             )),
@@ -287,8 +289,3 @@ pub const Model = struct {
         };
     }
 };
-
-// pub fn onClick(maybe_ptr: ?*anyopaque, ctx: *vxfw.EventContext) anyerror!void {
-//     _ = maybe_ptr orelse return;
-//     return ctx.consumeAndRedraw();
-// }
