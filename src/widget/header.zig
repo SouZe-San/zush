@@ -13,7 +13,7 @@ pub fn create_headerEndingWithUnicode(arena: std.mem.Allocator, max_width: u16, 
         @memcpy(header_buf[offset .. offset + unicode.len], unicode);
         offset += unicode.len;
     }
-    return .{ .text = header_buf, .style = .{ .bold = true } };
+    return .{ .text = header_buf, .style = .{ .bold = true, .bg = .{ .rgb = .{ 40, 40, 40 } } } };
 }
 
 pub fn create_headerStartingWithUnicode(arena: std.mem.Allocator, max_width: u16, title: []const u8, unicode: []const u8) !vaxis.vxfw.Text {
@@ -27,5 +27,5 @@ pub fn create_headerStartingWithUnicode(arena: std.mem.Allocator, max_width: u16
         offset += unicode.len;
     }
     @memcpy(header_buf[offset .. offset + title.len], title);
-    return .{ .text = header_buf, .style = .{ .bold = true } };
+    return .{ .text = header_buf, .style = .{ .bold = true, .bg = .{ .rgb = .{ 40, 40, 40 } } } };
 }
