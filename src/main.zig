@@ -1,17 +1,60 @@
 const std = @import("std");
-const zush = @import("zush");
 const vaxis = @import("vaxis");
 const vxfw = vaxis.vxfw;
-const iw = @import("iw/root.zig");
-const flasher = @import("./views/flasher.zig");
+
+const zush = @import("zush");
+const flasher = zush.views.Flasher;
+const home = zush.views.Home;
+const TabBar = zush.widgets.TabBar;
+// const iw = @import("iw/root.zig");
 // iw.d_verbose = false,
+
+const Tab = enum(u1) { flasher, iso_info };
+
+//  active/inactive colors for TAB button
+const tab_active_color: vaxis.Color = .{ .rgb = .{ 220, 40, 40 } }; // red
+const tab_inactive_color: vaxis.Color = .{ .rgb = .{ 45, 198, 22 } }; // green
 
 // app state
 const Model = struct {
-    activeTab: u32 = 0,
-    // topTab: vxfw.FlexColumn,
-    // text1: vxfw.Text,
-    // text2: vxfw.Text,
+    activeTab: Tab = .flasher,
+    flasher_model: flasher.Model = .{},
+    home_model: home.Model = .{},
+
+    flasher_label: [2]vaxis.Segment = .{
+        .{
+            .text = "F",
+            .style = .{
+                .fg = tab_active_color, // .flasher is the default active tab
+                .bg = .{ .rgb = .{ 40, 40, 40 } },
+            },
+        },
+        .{ .text = "lasher", .style = .{
+            .fg = .{ .rgb = .{ 255, 255, 255 } },
+            .bg = .{ .rgb = .{ 40, 40, 40 } },
+        } },
+    },
+    iso_label: [2]vaxis.Segment = .{
+        .{ .text = "I", .style = .{
+            .fg = tab_inactive_color,
+            .bg = .{ .rgb = .{ 40, 40, 40 } },
+        } },
+        .{ .text = "SO Info", .style = .{
+            .fg = .{ .rgb = .{ 255, 255, 255 } },
+            .bg = .{ .rgb = .{ 40, 40, 40 } },
+        } },
+    },
+
+    tab_bar: TabBar = .{
+        .btn_flasher = .{
+            .label = undefined, // latter defined
+            .onClick = Model.onClickFlasher,
+        },
+        .btn_iso = .{
+            .label = undefined, //  &iso_label in main()
+            .onClick = Model.onClickIsoInfo,
+        },
+    },
 
     // helper widget
     pub fn widget(self: *Model) vxfw.Widget {
@@ -22,103 +65,97 @@ const Model = struct {
         };
     }
 
-    fn typeErasedEventHandler(_: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
-        // const self: *Model = @ptrCast(@alignCast(ptr));
+    // update tab color on active and inctive
+    fn syncTabColors(self: *Model) void {
+        self.flasher_label[0].style.fg = if (self.activeTab == .flasher)
+            tab_active_color
+        else
+            tab_inactive_color;
+
+        self.iso_label[0].style.fg = if (self.activeTab == .iso_info)
+            tab_active_color
+        else
+            tab_inactive_color;
+    }
+
+    pub fn onClickIsoInfo(maybe_ptr: ?*anyopaque, ctx: *vxfw.EventContext) anyerror!void {
+        const ptr = maybe_ptr orelse return;
+        const self: *Model = @ptrCast(@alignCast(ptr));
+        self.activeTab = .iso_info;
+        self.syncTabColors();
+        try ctx.requestFocus(self.home_model.widget());
+        return ctx.consumeAndRedraw();
+    }
+
+    pub fn onClickFlasher(maybe_ptr: ?*anyopaque, ctx: *vxfw.EventContext) anyerror!void {
+        const ptr = maybe_ptr orelse return;
+        const self: *Model = @ptrCast(@alignCast(ptr));
+        self.activeTab = .flasher;
+        self.syncTabColors();
+        try ctx.requestFocus(self.flasher_model.widget());
+        return ctx.consumeAndRedraw();
+    }
+    fn typeErasedEventHandler(ptr: *anyopaque, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
+        // const flasher_w: flasher.Model = .{};
+        const self: *Model = @ptrCast(@alignCast(ptr));
         switch (event) {
             // The root widget is always sent an init event as the first event. Users of the
             // library can also send this event to other widgets they create if they need to do
             // some initialization.
-            // .init => return ctx.requestFocus(self.button.widget()),
+            .init => return ctx.requestFocus(self.flasher_model.widget()),
             .key_press => |key| {
-                if (key.matches('c', .{ .ctrl = true })) {
+                if (key.matches('c', .{ .ctrl = true }) or key.matches('q', .{})) {
                     ctx.quit = true;
                     return;
                 }
             },
-            // We can request a specific widget gets focus. In this case, we always want to focus
-            // our button. Having focus means that key events will be sent up the widget tree to
-            // the focused widget, and then bubble back down the tree to the root. Users can tell
-            // the runtime the event was handled and the capture or bubble phase will stop
-            // .focus_in => return ctx.requestFocus(self.button.widget()),
+            .focus_in => return ctx.requestFocus(switch (self.activeTab) {
+                .flasher => self.flasher_model.widget(),
+                .iso_info => self.home_model.widget(),
+            }),
             else => {},
         }
     }
 
-    fn typeErasedDrawFn(ptr: *anyopaque, ctx: vxfw.DrawContext) !vxfw.Surface {
+    fn typeErasedDrawFn(ptr: *anyopaque, ctx: vxfw.DrawContext) std.mem.Allocator.Error!vxfw.Surface {
         const self: *Model = @ptrCast(@alignCast(ptr));
-        // The DrawContext is inspired from Flutter. Each widget will receive a minimum and maximum
-        // constraint. The minimum constraint will always be set, even if it is set to 0x0. The
-        // maximum constraint can have null width and/or height - meaning there is no constraint in
-        // that direction and the widget should take up as much space as it needs. By calling size()
-        // on the max, we assert that it has some constrained size. This is *always* the case for
-        // the root widget - the maximum size will always be the size of the terminal screen.
-        const max_size = ctx.max.size();
 
-        // The DrawContext also contains an arena allocator that can be used for each frame. The
-        // lifetime of this allocation is until the next time we draw a frame. This is useful for
-        // temporary allocations such as the one below: we have an integer we want to print as text.
-        // We can safely allocate this with the ctx arena since we only need it for this frame.
-        // const count_text = try std.fmt.allocPrint(ctx.arena, "{d}", .{self.count});
-        // const text: vxfw.Text = .{ .text = count_text };
-        const textt = iw.checkMIME("build.zig", ctx.arena) catch |err| {
-            std.debug.print("error: {}", .{err});
-            return error.OutOfMemory;
+        const current_tab: vxfw.Widget = switch (self.activeTab) {
+            .flasher => self.flasher_model.widget(),
+            .iso_info => self.home_model.widget(),
         };
-        const text1: vxfw.Text = .{ .text = "home---" };
-        const text2: vxfw.Text = .{ .text = textt };
-        const roww: vxfw.FlexRow = .{
-            .children = &.{
-                .{ .widget = text1.widget(), .flex = 0 },
-                .{ .widget = text2.widget(), .flex = 0 },
-            },
-        };
-
-        // Each widget returns a Surface from its draw function. A Surface contains the rectangular
-        // area of the widget, as well as some information about the surface or widget: can we focus
-        // it? does it handle the mouse?
-        //
-        // It DOES NOT contain the location it should be within its parent. Only the parent can set
-        // this via a SubSurface. Here, we will return a Surface for the root widget (Model), which
-        // has two SubSurfaces: one for the text and one for the button. A SubSurface is a Surface
-        // with an offset and a z-index - the offset can be negative. This lets a parent draw a
-        // child and place it within itself
-        const flex_child: vxfw.SubSurface = .{
+        const tab_bar_surface: vxfw.SubSurface = .{
             .origin = .{ .row = 0, .col = 0 },
-            .surface = try roww.draw(ctx),
+            .surface = try self.tab_bar.widget().draw(ctx),
+        };
+        const body_surface: vxfw.SubSurface = .{
+            .origin = .{ .row = 3, .col = 0 },
+            .surface = try current_tab.draw(ctx),
         };
 
-        // const button_child: vxfw.SubSurface = .{
-        //     .origin = .{ .row = 2, .col = 0 },
-        //     .surface = try self.button.draw(ctx.withConstraints(
-        //         ctx.min,
-        //         // Here we explicitly set a new maximum size constraint for the Button. A Button will
-        //         // expand to fill its area and must have some hard limit in the maximum constraint
-        //         .{ .width = 16, .height = 3 },
-        //     )),
-        // };
+        const children = try ctx.arena.alloc(vxfw.SubSurface, 2);
+        children[0] = tab_bar_surface;
+        children[1] = body_surface;
 
-        // We also can use our arena to allocate the slice for our SubSurfaces. This slice only
-        // needs to live until the next frame, making this safe.
-        const children = try ctx.arena.alloc(vxfw.SubSurface, 1);
-        children[0] = flex_child;
+        const size = ctx.max.size();
+        const total_cells: usize = @as(usize, size.width) * size.height;
+        const bg_buffer = try ctx.arena.alloc(vaxis.Cell, total_cells);
+        const custom_bg = vaxis.Color{ .rgb = .{ 40, 40, 40 } };
+
+        @memset(bg_buffer, vaxis.Cell{ .style = .{ .bg = custom_bg } });
 
         return .{
-            // A Surface must have a size. Our root widget is the size of the screen
-            .size = max_size,
+            .size = size,
             .widget = self.widget(),
-            // We didn't actually need to draw anything for the root. In this case, we can set
-            // buffer to a zero length slice. If this slice is *not zero length*, the runtime will
-            // assert that its length is equal to the size.width * size.height.
-            .buffer = &.{},
+            .buffer = bg_buffer,
             .children = children,
         };
     }
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     defer _ = gpa.deinit();
-
     const allocator = gpa.allocator();
 
     var app = try vxfw.App.init(allocator);
@@ -126,14 +163,16 @@ pub fn main() !void {
 
     // We heap allocate our model because we will require a stable pointer to it in our Button
     // widget
-    const model = try allocator.create(flasher.Model);
+    const model = try allocator.create(Model);
     defer allocator.destroy(model);
+    // defer _ = gpa.detectLeaks();
 
     // Set the initial state of our button
     model.* = .{};
+    model.tab_bar.btn_flasher.userdata = model;
+    model.tab_bar.btn_iso.userdata = model;
+    model.tab_bar.btn_flasher.label = &model.flasher_label;
+    model.tab_bar.btn_iso.label = &model.iso_label;
 
     try app.run(model.widget(), .{});
 }
-
-// test "simple test" {
-// }
