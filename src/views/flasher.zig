@@ -56,13 +56,9 @@ pub const Model = struct {
         };
     }
 
-    /// Where we look for ISO images: ~/Downloads, falling back to the
-    /// current directory if $HOME isn't set. Change this if your ISOs live
-    /// somewhere else (e.g. a mounted drive).
+    ////// Where we look for ISO images: Resolves the absolute path of the directory where the command was executed
     fn isoSearchDir(buf: []u8) []const u8 {
-        // const home = std.posix.getenv("HOME") orelse return ".";
-        // return std.fmt.bufPrint(buf, "{s}/Downloads", .{home}) catch ".";
-        return std.fs.selfExeDirPath(buf) catch ".";
+        return std.fs.cwd().realpath(".", buf) catch ".";
     }
 
     // scan for iso image
